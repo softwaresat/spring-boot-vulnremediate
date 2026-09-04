@@ -1,0 +1,6 @@
+{
+  "docker_images": {"eclipse-temurin": "21-jre"},
+  "helm_chart_version": "1.2.3",
+  "spring_boot_version": "3.3.12",
+  "scan_command": "trivy fs --format json --output trivy-fs.json ."
+}
