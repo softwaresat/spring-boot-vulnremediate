@@ -2,12 +2,15 @@
 
 VulnRemediate is a LangGraph-powered harness for remediating **Spring Boot application** vulnerabilities. It makes deterministic changes first, keeps upgrades reviewable, and leaves any ambiguous remediation for a human or a separately configured coding agent. It refuses to run against a repository that does not declare Spring Boot through its parent POM, BOM, or starter dependencies.
 
+Copy [`templates/github-actions/spring-boot-security.yml`](templates/github-actions/spring-boot-security.yml) into a target application at `.github/workflows/security.yml` to enable the GitHub scanning contract used by the harness.
+
 Its workflow is:
 
 1. Inspect the repository and update explicitly configured Docker, Helm, and Spring Boot baselines.
 2. Parse GitHub Dependabot alert exports and Trivy filesystem/container JSON reports.
 3. Build a **parent-first** Maven plan: change the Spring Boot parent/BOM or dependency-management entry before a child dependency.
 4. Apply the plan, run Maven verification and optional scans, then commit/push only when requested.
+5. Optionally open a GitHub pull request, wait for its GitHub Actions workflow, download the Trivy artifact, and compare the post-scan result.
 
 No vendor endpoint, registry, or model is baked in. The harness never invents versions: baseline versions are supplied in configuration, while dependency recommendations must come from a scan artifact.
 
@@ -33,6 +36,13 @@ vulnremediate export-dependabot    # retrieve open GitHub Dependabot alerts
 vulnremediate plan                 # non-mutating graph execution and JSON plan
 vulnremediate remediate --apply    # change, verify, then optionally push a branch
 vulnremediate run                  # compatibility alias for remediate
+```
+
+For the complete GitHub loop:
+
+```bash
+vulnremediate remediate --repo . --github-repository owner/repo \
+  --apply --branch security/remediate --push --create-pull-request --wait-for-ci
 ```
 
 Apply changes and verify:

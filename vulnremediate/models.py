@@ -63,6 +63,14 @@ class RunConfig:
     fail_on_remaining: bool = True
     agent_model: str | None = None
     agent_api_key_env: str = "OPENAI_API_KEY"
+    post_scan_report: Path | None = None
+    container_image: str | None = None
+    container_build_command: str | None = None
+    create_pull_request: bool = False
+    pull_request_base: str = "main"
+    wait_for_ci: bool = False
+    ci_timeout_seconds: int = 600
+    run_id: str | None = None
 
     @classmethod
     def from_mapping(cls, repo: Path, mapping: dict[str, Any], **overrides: Any) -> "RunConfig":

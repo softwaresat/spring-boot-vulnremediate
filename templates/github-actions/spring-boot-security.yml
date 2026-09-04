@@ -22,9 +22,8 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
-      - name: Verify Spring Boot application
-        run: mvn -B verify
-      - name: Scan filesystem and Maven dependencies
+      - run: mvn -B verify
+      - name: Scan source, dependencies, and container metadata
         uses: aquasecurity/trivy-action@0.28.0
         with:
           scan-type: fs
@@ -33,11 +32,10 @@ jobs:
           output: trivy-results.sarif
           severity: HIGH,CRITICAL
           exit-code: '0'
-      - name: Publish Trivy findings
-        uses: github/codeql-action/upload-sarif@v3
+      - uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-results.sarif
-      - name: Export machine-readable Trivy report
+      - name: Export Trivy JSON for VulnRemediate
         uses: aquasecurity/trivy-action@0.28.0
         with:
           scan-type: fs

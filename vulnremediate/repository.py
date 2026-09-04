@@ -124,25 +124,35 @@ def baseline_changes(config: RunConfig) -> list[Change]:
         for image, new_tag in config.docker_images.items():
             match = re.search(rf"(?m)^FROM\s+({re.escape(image)}):([^\s@]+)", text)
             if match and match.group(2) != new_tag:
-                changes.append(Change(dockerfile, f"Update Docker base image {image}", match.group(2), new_tag))
+                changes.append(Change(dockerfile, f"Update Docker base image {image}", match.group(2), new_tag, "docker-base"))
     if config.helm_chart_version:
         for chart in config.repo.rglob("Chart.yaml"):
             text = chart.read_text()
             match = re.search(r"(?m)^version:\s*([^\s#]+)", text)
             if match and match.group(1) != config.helm_chart_version:
-                changes.append(Change(chart, "Update Helm chart version", match.group(1), config.helm_chart_version))
+                changes.append(Change(chart, "Update Helm chart version", match.group(1), config.helm_chart_version, "helm-chart"))
     if config.spring_boot_version:
         for pom in pom_files(config.repo):
             text = pom.read_text()
             match = re.search(r"(<artifactId>spring-boot-starter-parent</artifactId>\s*<version>\s*)([^<]+)", text)
             if match and match.group(2).strip() != config.spring_boot_version:
-                changes.append(Change(pom, "Update Spring Boot parent", match.group(2).strip(), config.spring_boot_version))
+                changes.append(Change(pom, "Update Spring Boot parent", match.group(2).strip(), config.spring_boot_version, "spring-boot-parent"))
     return changes
 
 
 def apply_baseline_change(change: Change) -> None:
     text = change.path.read_text()
-    updated = text.replace(change.before, change.after, 1)
-    if updated == text:
+    old = re.escape(change.before)
+    if change.owner == "docker-base":
+        image = re.escape(change.description.removeprefix("Update Docker base image "))
+        pattern = rf"(?m)^(FROM\s+{image}:){old}(?=\s|$)"
+    elif change.owner == "helm-chart":
+        pattern = rf"(?m)^(version:\s*){old}(?=\s|#|$)"
+    elif change.owner == "spring-boot-parent":
+        pattern = rf"(<artifactId>spring-boot-starter-parent</artifactId>\s*<version>\s*){old}(?=\s*</version>)"
+    else:
+        pattern = old
+    updated, count = re.subn(pattern, rf"\g<1>{change.after}" if "(" in pattern else change.after, text, count=1)
+    if count != 1:
         raise RuntimeError(f"Could not apply baseline change to {change.path}")
     change.path.write_text(updated)

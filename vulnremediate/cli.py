@@ -35,6 +35,13 @@ def _add_execution_options(parser: argparse.ArgumentParser, allow_apply: bool) -
         parser.add_argument("--apply", action="store_true", help="Write planned changes")
         parser.add_argument("--push", action="store_true", help="Commit and push after verification")
         parser.add_argument("--branch", help="Create this branch before committing; requires --push")
+        parser.add_argument("--post-scan-report", help="Path written by the post-remediation scanner")
+        parser.add_argument("--container-image", help="Image reference passed to scan_command as {image}")
+        parser.add_argument("--container-build-command", help="Build command run before Maven verification")
+        parser.add_argument("--create-pull-request", action="store_true")
+        parser.add_argument("--pull-request-base", default="main")
+        parser.add_argument("--wait-for-ci", action="store_true")
+        parser.add_argument("--ci-timeout-seconds", type=int, default=600)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -63,7 +70,7 @@ def _emit(value: Any) -> None:
 def _run_graph(args: argparse.Namespace, apply: bool) -> int:
     repo = Path(args.repo).resolve()
     config_path, data = _load_config(repo, args.config)
-    config = RunConfig.from_mapping(repo, data, apply=apply, push=getattr(args, "push", False), branch=getattr(args, "branch", None), github_repository=args.github_repository, github_token_env=args.github_token_env, agent_model=args.agent_model, agent_api_key_env=args.agent_api_key_env, fail_on_remaining=not args.allow_unresolved, scan_report=Path(args.scan_report).resolve() if args.scan_report else None, config_file=config_path)
+    config = RunConfig.from_mapping(repo, data, apply=apply, push=getattr(args, "push", False), branch=getattr(args, "branch", None), github_repository=args.github_repository, github_token_env=args.github_token_env, agent_model=args.agent_model, agent_api_key_env=args.agent_api_key_env, fail_on_remaining=not args.allow_unresolved, scan_report=Path(args.scan_report).resolve() if args.scan_report else None, post_scan_report=Path(args.post_scan_report).resolve() if getattr(args, "post_scan_report", None) else None, container_image=getattr(args, "container_image", None), container_build_command=getattr(args, "container_build_command", None), create_pull_request=getattr(args, "create_pull_request", False), pull_request_base=getattr(args, "pull_request_base", "main"), wait_for_ci=getattr(args, "wait_for_ci", False), ci_timeout_seconds=getattr(args, "ci_timeout_seconds", 600), config_file=config_path)
     try:
         from .graph import build_graph
         state = build_graph().invoke({"config": config, "errors": []})
