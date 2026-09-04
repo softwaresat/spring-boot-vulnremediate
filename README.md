@@ -25,6 +25,16 @@ Start with a dry run:
 vulnremediate run --repo . --scan-report dependabot-alerts.json
 ```
 
+## CLI commands
+
+```text
+vulnremediate init                 # create .vulnremediate.json
+vulnremediate export-dependabot    # retrieve open GitHub Dependabot alerts
+vulnremediate plan                 # non-mutating graph execution and JSON plan
+vulnremediate remediate --apply    # change, verify, then optionally push a branch
+vulnremediate run                  # compatibility alias for remediate
+```
+
 Apply changes and verify:
 
 ```bash
