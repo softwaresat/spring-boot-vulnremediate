@@ -25,7 +25,7 @@ jobs:
       - name: Verify Spring Boot application
         run: mvn -B verify
       - name: Scan filesystem and Maven dependencies
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scan-ref: .
@@ -38,7 +38,7 @@ jobs:
         with:
           sarif_file: trivy-results.sarif
       - name: Export machine-readable Trivy report
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scan-ref: .
