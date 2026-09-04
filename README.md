@@ -43,6 +43,14 @@ To retrieve open GitHub Dependabot alerts directly (requires a token with Depend
 vulnremediate run --repo . --github-repository owner/repository --apply --branch security/remediate-alerts --push
 ```
 
+For blocked cases, add a model that supports the OpenAI Responses API. The agent is deliberately constrained to request Maven diagnostics or document a manual review; deterministic code remains the only component that edits a repository.
+
+```bash
+vulnremediate run --repo . --scan-report dependabot-alerts.json --apply --agent-model your-model-id
+```
+
+The complete, versioned system and task prompts are in [`vulnremediate/prompts.py`](vulnremediate/prompts.py).
+
 `--push` requires a clean repository before the run and an already configured Git remote. The command prints a JSON audit record, including every command and file edit. The included GitHub Actions workflow uploads Trivy reports and publishes SARIF results to GitHub code scanning; Dependabot continuously supplies Maven and Docker advisories.
 
 ## Configuration

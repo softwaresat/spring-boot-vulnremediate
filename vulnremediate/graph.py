@@ -7,7 +7,8 @@ from typing import Any, TypedDict
 from langgraph.graph import END, START, StateGraph
 
 from .github_api import export_dependabot_alerts
-from .models import Change, RemediationPlan, RunConfig
+from .agent import review_blocked_plan
+from .models import AgentDecision, Change, RemediationPlan, RunConfig
 from .repository import apply_baseline_change, apply_maven_change, baseline_changes, is_spring_boot_application, parent_first_plan, pom_files, run
 from .scans import parse_scan_report
 
@@ -18,6 +19,7 @@ class RemediationState(TypedDict, total=False):
     baseline_changes: list[Change]
     maven_changes: list[Change]
     plans: list[RemediationPlan]
+    agent_decisions: list[AgentDecision]
     commands: list[dict[str, Any]]
     verification_ok: bool
     errors: list[str]
@@ -66,6 +68,14 @@ def apply_plan(state: RemediationState) -> dict[str, Any]:
     return {}
 
 
+def agent_review(state: RemediationState) -> dict[str, Any]:
+    config = state["config"]
+    if not config.agent_model:
+        return {"agent_decisions": []}
+    blocked = [plan for plan in state.get("plans", []) if plan.blocked_reason]
+    return {"agent_decisions": [review_blocked_plan(config, plan) for plan in blocked]}
+
+
 def verify(state: RemediationState) -> dict[str, Any]:
     config = state["config"]
     if not config.apply:
@@ -110,6 +120,7 @@ def build_graph():
     graph.add_node("ingest_scan", ingest_scan)
     graph.add_node("plan_parent_first", plan_parent_first)
     graph.add_node("apply_plan", apply_plan)
+    graph.add_node("agent_review", agent_review)
     graph.add_node("verify", verify)
     graph.add_node("commit_and_push", commit_and_push)
     graph.add_edge(START, "discover")
@@ -117,7 +128,8 @@ def build_graph():
     graph.add_edge("harden_baselines", "ingest_scan")
     graph.add_edge("ingest_scan", "plan_parent_first")
     graph.add_edge("plan_parent_first", "apply_plan")
-    graph.add_edge("apply_plan", "verify")
+    graph.add_edge("apply_plan", "agent_review")
+    graph.add_edge("agent_review", "verify")
     graph.add_edge("verify", "commit_and_push")
     graph.add_edge("commit_and_push", END)
     return graph.compile()

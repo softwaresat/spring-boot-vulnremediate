@@ -28,10 +28,12 @@ def main() -> int:
     run_parser.add_argument("--github-repository", help="owner/repository; downloads open Dependabot alerts when no report is supplied")
     run_parser.add_argument("--github-token-env", default="GITHUB_TOKEN")
     run_parser.add_argument("--allow-unresolved", action="store_true", help="Do not fail verification when a scanner finding has no safe explicit Maven owner")
+    run_parser.add_argument("--agent-model", help="Optional OpenAI-compatible model for constrained review of blocked findings")
+    run_parser.add_argument("--agent-api-key-env", default="OPENAI_API_KEY")
     args = parser.parse_args()
     repo = Path(args.repo).resolve()
     config_path, data = _load_config(repo, args.config)
-    config = RunConfig.from_mapping(repo, data, apply=args.apply, push=args.push, branch=args.branch, github_repository=args.github_repository, github_token_env=args.github_token_env, fail_on_remaining=not args.allow_unresolved, scan_report=Path(args.scan_report).resolve() if args.scan_report else None, config_file=config_path)
+    config = RunConfig.from_mapping(repo, data, apply=args.apply, push=args.push, branch=args.branch, github_repository=args.github_repository, github_token_env=args.github_token_env, agent_model=args.agent_model, agent_api_key_env=args.agent_api_key_env, fail_on_remaining=not args.allow_unresolved, scan_report=Path(args.scan_report).resolve() if args.scan_report else None, config_file=config_path)
     try:
         state = build_graph().invoke({"config": config, "errors": []})
     except GitHubApiError as error:

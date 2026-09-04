@@ -38,6 +38,14 @@ class RemediationPlan:
     blocked_reason: str | None = None
 
 
+@dataclass(frozen=True)
+class AgentDecision:
+    action: str
+    rationale: str
+    evidence_needed: list[str] = field(default_factory=list)
+    manual_steps: list[str] = field(default_factory=list)
+
+
 @dataclass
 class RunConfig:
     repo: Path
@@ -53,6 +61,8 @@ class RunConfig:
     github_token_env: str = "GITHUB_TOKEN"
     branch: str | None = None
     fail_on_remaining: bool = True
+    agent_model: str | None = None
+    agent_api_key_env: str = "OPENAI_API_KEY"
 
     @classmethod
     def from_mapping(cls, repo: Path, mapping: dict[str, Any], **overrides: Any) -> "RunConfig":
@@ -68,6 +78,8 @@ def audit_value(value: Any) -> Any:
         return asdict(value)
     if isinstance(value, RemediationPlan):
         return {"finding": asdict(value.finding), "change": value.change.audit() if value.change else None, "rationale": value.rationale, "blocked_reason": value.blocked_reason}
+    if isinstance(value, AgentDecision):
+        return asdict(value)
     if isinstance(value, Path):
         return str(value)
     return value
