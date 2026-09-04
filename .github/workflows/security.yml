@@ -34,7 +34,7 @@ jobs:
           severity: HIGH,CRITICAL
           exit-code: '0'
       - name: Publish Trivy findings
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy-results.sarif
       - name: Export machine-readable Trivy report
