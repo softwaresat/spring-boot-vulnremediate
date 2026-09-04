@@ -84,5 +84,7 @@ Copy [`examples/vulnremediate.json`](examples/vulnremediate.json) to `.vulnremed
 * Maven version resolution uses `mvn help:effective-pom` before editing a child dependency.
 * The target must be a Spring Boot application (`spring-boot-starter-parent`, `spring-boot-dependencies`, or a `spring-boot-starter-*` dependency).
 * Each finding has an explicit remediation plan: Spring Boot parent, dependency-management entry, Maven version property, direct dependency, or a documented blocked reason.
+* Applied file edits are transactionally snapshotted and restored automatically when build or scan verification fails.
+* GitHub API calls retry transient failures; a post-PR CI run re-fetches Dependabot alerts and downloads the Trivy JSON artifact for comparison.
 * A plan is skipped when no scanner-provided fixed version exists.
 * Pushes are opt-in, can target a fresh branch, and happen only after successful verification.

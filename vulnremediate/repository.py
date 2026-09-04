@@ -131,6 +131,20 @@ def baseline_changes(config: RunConfig) -> list[Change]:
             match = re.search(r"(?m)^version:\s*([^\s#]+)", text)
             if match and match.group(1) != config.helm_chart_version:
                 changes.append(Change(chart, "Update Helm chart version", match.group(1), config.helm_chart_version, "helm-chart"))
+    for values in config.repo.rglob("values*.yaml"):
+        text = values.read_text()
+        for image, new_tag in config.helm_images.items():
+            pattern = rf"(?ms)(repository:\s*{re.escape(image)}\s*\n\s*tag:\s*)([^\s#]+)"
+            match = re.search(pattern, text)
+            if match and match.group(2) != new_tag:
+                changes.append(Change(values, f"Update Helm image {image}", match.group(2), new_tag, "helm-image"))
+    for chart in config.repo.rglob("Chart.yaml"):
+        text = chart.read_text()
+        for name, new_version in config.helm_dependencies.items():
+            pattern = rf"(?ms)(-\s*name:\s*{re.escape(name)}\s*\n\s*version:\s*)([^\s#]+)"
+            match = re.search(pattern, text)
+            if match and match.group(2) != new_version:
+                changes.append(Change(chart, f"Update Helm dependency {name}", match.group(2), new_version, "helm-dependency"))
     if config.spring_boot_version:
         for pom in pom_files(config.repo):
             text = pom.read_text()
@@ -150,6 +164,12 @@ def apply_baseline_change(change: Change) -> None:
         pattern = rf"(?m)^(version:\s*){old}(?=\s|#|$)"
     elif change.owner == "spring-boot-parent":
         pattern = rf"(<artifactId>spring-boot-starter-parent</artifactId>\s*<version>\s*){old}(?=\s*</version>)"
+    elif change.owner == "helm-image":
+        image = re.escape(change.description.removeprefix("Update Helm image "))
+        pattern = rf"(?ms)(repository:\s*{image}\s*\n\s*tag:\s*){old}(?=\s|#|$)"
+    elif change.owner == "helm-dependency":
+        name = re.escape(change.description.removeprefix("Update Helm dependency "))
+        pattern = rf"(?ms)(-\s*name:\s*{name}\s*\n\s*version:\s*){old}(?=\s|#|$)"
     else:
         pattern = old
     updated, count = re.subn(pattern, rf"\g<1>{change.after}" if "(" in pattern else change.after, text, count=1)

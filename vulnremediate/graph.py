@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import subprocess
+import json
 from typing import Any, TypedDict
 
 from langgraph.graph import END, START, StateGraph
@@ -13,6 +14,7 @@ from .journal import RunJournal
 from .models import AgentDecision, Change, Finding, RemediationPlan, RunConfig
 from .repository import apply_baseline_change, apply_maven_change, baseline_changes, is_spring_boot_application, parent_first_plan, pom_files, run
 from .scans import parse_scan_report
+from .transaction import ChangeTransaction
 
 
 class RemediationState(TypedDict, total=False):
@@ -30,6 +32,7 @@ class RemediationState(TypedDict, total=False):
     verification_ok: bool
     errors: list[str]
     journal_path: str
+    transaction_path: str
 
 
 def _journal(state: RemediationState, event: str, **payload: Any) -> None:
@@ -62,9 +65,6 @@ def acquire_before(state: RemediationState) -> dict[str, Any]:
 
 def harden_baselines(state: RemediationState) -> dict[str, Any]:
     changes = baseline_changes(state["config"])
-    if state["config"].apply:
-        for change in changes:
-            apply_baseline_change(change)
     _journal(state, "baseline_planned", changes=[item.audit() for item in changes])
     return {"baseline_changes": changes}
 
@@ -88,9 +88,16 @@ def agent_review(state: RemediationState) -> dict[str, Any]:
 
 
 def apply_plan(state: RemediationState) -> dict[str, Any]:
-    if state["config"].apply:
+    config = state["config"]
+    if config.apply:
+        transaction = ChangeTransaction(config.repo, config.run_id or "unknown")
+        changes = state.get("baseline_changes", []) + state.get("maven_changes", [])
+        transaction.snapshot(changes)
+        for change in state.get("baseline_changes", []):
+            apply_baseline_change(change)
         for change in state.get("maven_changes", []):
             apply_maven_change(change)
+        return {"transaction_path": str(transaction.path)}
     _journal(state, "changes_applied", count=len(state.get("baseline_changes", [])) + len(state.get("maven_changes", [])))
     return {}
 
@@ -104,10 +111,12 @@ def verify(state: RemediationState) -> dict[str, Any]:
         built = subprocess.run(config.container_build_command, cwd=config.repo, shell=True, text=True, capture_output=True, check=False)
         commands.append({"command": config.container_build_command, "exit_code": built.returncode})
         if built.returncode:
+            ChangeTransaction(config.repo, config.run_id or "unknown").rollback()
             return {"verification_ok": False, "commands": commands}
     verified = run(["mvn", "-B", "verify"], config.repo)
     commands.append({"command": "mvn -B verify", "exit_code": verified.returncode})
     if verified.returncode:
+        ChangeTransaction(config.repo, config.run_id or "unknown").rollback()
         return {"verification_ok": False, "commands": commands}
     if config.scan_command:
         post = config.post_scan_report or config.repo / "target" / "vulnremediate" / "post-scan.json"
@@ -116,6 +125,7 @@ def verify(state: RemediationState) -> dict[str, Any]:
         scanned = subprocess.run(command, cwd=config.repo, shell=True, text=True, capture_output=True, check=False)
         commands.append({"command": command, "exit_code": scanned.returncode})
         if scanned.returncode:
+            ChangeTransaction(config.repo, config.run_id or "unknown").rollback()
             return {"verification_ok": False, "commands": commands}
     _journal(state, "verified", commands=commands)
     return {"verification_ok": True, "commands": commands}
@@ -137,7 +147,9 @@ def compare_scans(state: RemediationState) -> dict[str, Any]:
     before = state.get("findings_before", [])
     still_open = remaining(before, after) if after else []
     blocked = [plan for plan in state.get("plans", []) if plan.blocked_reason]
-    ok = state.get("verification_ok", False) and (not state["config"].fail_on_remaining or not still_open and not blocked)
+    ok = state.get("verification_ok", False) and (not state["config"].apply or not state["config"].fail_on_remaining or not still_open and not blocked)
+    if state["config"].apply and not ok:
+        ChangeTransaction(state["config"].repo, state["config"].run_id or "unknown").rollback()
     _journal(state, "compared", before=len(before), after=len(after), remaining=len(still_open), blocked=len(blocked))
     return {"remaining_findings": still_open, "verification_ok": ok}
 
@@ -145,6 +157,8 @@ def compare_scans(state: RemediationState) -> dict[str, Any]:
 def publish(state: RemediationState) -> dict[str, Any]:
     config = state["config"]
     if not (config.apply and config.push and state.get("verification_ok")):
+        if config.apply and state.get("verification_ok"):
+            ChangeTransaction(config.repo, config.run_id or "unknown").commit()
         return {"publication": {"status": "not_requested"}}
     if not config.branch:
         return {"errors": state.get("errors", []) + ["--branch is required with --push"]}
@@ -160,6 +174,7 @@ def publish(state: RemediationState) -> dict[str, Any]:
         client = GitHubClient(config.github_token_env)
         publication["pull_request"] = client.create_pull_request(config.github_repository, config.branch, config.pull_request_base, "chore: remediate Spring Boot vulnerabilities", "Automated parent-first remediation. Review the attached run audit and GitHub security results.")
     _journal(state, "published", **publication)
+    ChangeTransaction(config.repo, config.run_id or "unknown").commit()
     return {"publication": publication}
 
 
@@ -177,6 +192,11 @@ def collect_github_ci(state: RemediationState) -> dict[str, Any]:
     try:
         client.download_artifact_json(config.github_repository, int(workflow["id"]), "trivy-results", report)
         after = parse_scan_report(report)
+        # Re-fetch Dependabot after the branch workflow. This verifies both the
+        # container/FS scan and GitHub's Maven advisory state.
+        dependabot_report = config.repo / "target" / "vulnremediate" / "dependabot-after.json"
+        dependabot_report.write_text(json.dumps(client.dependabot_alerts(config.github_repository)))
+        after.extend(parse_scan_report(dependabot_report))
         still_open = remaining(state.get("findings_before", []), after)
         ci["artifact"] = str(report)
         return {"ci": ci, "findings_after": after, "remaining_findings": still_open, "verification_ok": not (config.fail_on_remaining and still_open)}

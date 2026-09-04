@@ -54,6 +54,8 @@ class RunConfig:
     scan_report: Path | None = None
     config_file: Path | None = None
     docker_images: dict[str, str] = field(default_factory=dict)
+    helm_images: dict[str, str] = field(default_factory=dict)
+    helm_dependencies: dict[str, str] = field(default_factory=dict)
     helm_chart_version: str | None = None
     spring_boot_version: str | None = None
     scan_command: str | None = None

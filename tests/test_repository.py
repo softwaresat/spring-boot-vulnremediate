@@ -3,7 +3,8 @@ import unittest
 from pathlib import Path
 
 from vulnremediate.models import Finding
-from vulnremediate.repository import apply_maven_change, is_spring_boot_application, parent_first_changes, parent_first_plan
+from vulnremediate.models import RunConfig
+from vulnremediate.repository import apply_baseline_change, apply_maven_change, baseline_changes, is_spring_boot_application, parent_first_changes, parent_first_plan
 
 
 class RepositoryTests(unittest.TestCase):
@@ -39,3 +40,14 @@ class RepositoryTests(unittest.TestCase):
             (root / "pom.xml").write_text("<project><dependencies /></project>")
             plan = parent_first_plan(root, [Finding("a:b", "1", "2", "report")])[0]
             self.assertIsNotNone(plan.blocked_reason)
+
+    def test_updates_helm_image_and_dependency_without_global_replace(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "values.yaml").write_text("image:\n  repository: api\n  tag: old\n")
+            (root / "Chart.yaml").write_text("dependencies:\n  - name: redis\n    version: 1.0.0\n")
+            changes = baseline_changes(RunConfig(root, helm_images={"api": "new"}, helm_dependencies={"redis": "2.0.0"}))
+            for change in changes:
+                apply_baseline_change(change)
+            self.assertIn("tag: new", (root / "values.yaml").read_text())
+            self.assertIn("version: 2.0.0", (root / "Chart.yaml").read_text())

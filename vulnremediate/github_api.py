@@ -26,13 +26,21 @@ class GitHubClient:
     def request(self, method: str, path: str, payload: dict | None = None, binary: bool = False):
         data = json.dumps(payload).encode() if payload is not None else None
         request = Request(f"https://api.github.com{path}", data=data, headers={"Accept": "application/vnd.github+json", "Authorization": f"Bearer {self.token}", "X-GitHub-Api-Version": "2022-11-28", "Content-Type": "application/json"}, method=method)
-        try:
-            with urlopen(request, timeout=30) as response:
-                raw = response.read()
-        except (HTTPError, URLError) as error:
-            reason = getattr(error, "reason", str(error))
-            code = getattr(error, "code", "network")
-            raise GitHubApiError(f"GitHub {method} {path} failed ({code}): {reason}") from error
+        error: Exception | None = None
+        for attempt in range(3):
+            try:
+                with urlopen(request, timeout=30) as response:
+                    raw = response.read()
+                break
+            except (HTTPError, URLError) as caught:
+                error = caught
+                code = getattr(caught, "code", 0)
+                if code not in {429, 500, 502, 503, 504} or attempt == 2:
+                    reason = getattr(caught, "reason", str(caught))
+                    raise GitHubApiError(f"GitHub {method} {path} failed ({code or 'network'}): {reason}") from caught
+                time.sleep(2**attempt)
+        else:  # pragma: no cover - defensive; loop either breaks or raises
+            raise GitHubApiError(f"GitHub {method} {path} failed: {error}")
         return raw if binary else json.loads(raw.decode()) if raw else {}
 
     def dependabot_alerts(self, repository: str) -> list[dict]:
