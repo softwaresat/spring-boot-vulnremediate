@@ -4,7 +4,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from .models import Change, Finding, RunConfig
+from .models import Change, Finding, RemediationPlan, RunConfig
 
 
 def run(command: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -21,11 +21,25 @@ def is_spring_boot_application(repo: Path) -> bool:
     return any(any(marker in pom.read_text() for marker in markers) for pom in pom_files(repo))
 
 
-def parent_first_changes(repo: Path, findings: list[Finding]) -> list[Change]:
-    """Plan only scanner-supported changes, preferring parent/BOM management entries."""
-    changes: list[Change] = []
+def _property_change(pom: Path, property_name: str, finding: Finding) -> Change | None:
+    text = pom.read_text()
+    match = re.search(rf"(<{re.escape(property_name)}>\s*)([^<]+)(\s*</{re.escape(property_name)}>)", text)
+    if match and match.group(2).strip() != finding.fixed_version:
+        return Change(pom, f"Update managed Maven property {property_name} for {finding.package}", match.group(2).strip(), finding.fixed_version or "", "property")
+    return None
+
+
+def parent_first_plan(repo: Path, findings: list[Finding]) -> list[RemediationPlan]:
+    """Resolve explicit dependency management, then properties, then direct dependencies.
+
+    Only a scanner-provided fixed version is actionable. A plan retains blocked
+    findings so the final audit explains exactly why no change was made.
+    """
+    plans: list[RemediationPlan] = []
+    seen: set[tuple[Path, str, str]] = set()
     for finding in findings:
         if not finding.fixed_version:
+            plans.append(RemediationPlan(finding, None, "No fixed version supplied by scanner", "scanner has no recommended version"))
             continue
         needle = re.escape(finding.artifact_id)
         chosen: Change | None = None
@@ -41,7 +55,7 @@ def parent_first_changes(repo: Path, findings: list[Finding]) -> list[Change]:
                     text,
                 )
                 if boot_parent and boot_parent.group(2).strip() != finding.fixed_version:
-                    changes.append(Change(pom, "Update Spring Boot parent from scanner recommendation", boot_parent.group(2).strip(), finding.fixed_version))
+                    chosen = Change(pom, "Update Spring Boot parent from scanner recommendation", boot_parent.group(2).strip(), finding.fixed_version, "spring-boot-parent")
                     break
             dependency = re.compile(
                 rf"(<dependency>.*?<artifactId>\s*{needle}\s*</artifactId>.*?<version>\s*)([^<]+)(\s*</version>)",
@@ -53,7 +67,16 @@ def parent_first_changes(repo: Path, findings: list[Finding]) -> list[Change]:
             before = match.group(2).strip()
             if before == finding.fixed_version:
                 continue
-            candidate = Change(pom, f"Parent-first Maven upgrade for {finding.package}", before, finding.fixed_version)
+            property_ref = re.fullmatch(r"\$\{([^}]+)\}", before)
+            if property_ref:
+                candidate = _property_change(pom, property_ref.group(1), finding)
+                if candidate is None:
+                    # A root parent is allowed to own a property used by children.
+                    candidate = next((_property_change(parent, property_ref.group(1), finding) for parent in candidates if _property_change(parent, property_ref.group(1), finding)), None)
+                if candidate is None:
+                    continue
+            else:
+                candidate = Change(pom, f"Parent-first Maven upgrade for {finding.package}", before, finding.fixed_version, "dependency-management")
             # A dependencyManagement location is an explicit owner and wins immediately.
             management_start = text.rfind("<dependencyManagement>", 0, match.start())
             management_end = text.rfind("</dependencyManagement>", 0, match.start())
@@ -63,15 +86,32 @@ def parent_first_changes(repo: Path, findings: list[Finding]) -> list[Change]:
             if chosen is None:
                 chosen = candidate
         if chosen:
-            changes.append(chosen)
-    return changes
+            key = (chosen.path, chosen.before, chosen.after)
+            if key not in seen:
+                plans.append(RemediationPlan(finding, chosen, "Resolved nearest explicit Maven owner"))
+                seen.add(key)
+        else:
+            plans.append(RemediationPlan(finding, None, "No explicit Maven owner found", "dependency is inherited from an external BOM or has no declared version"))
+    return plans
+
+
+def parent_first_changes(repo: Path, findings: list[Finding]) -> list[Change]:
+    """Compatibility helper returning only actionable plans."""
+    return [plan.change for plan in parent_first_plan(repo, findings) if plan.change]
 
 
 def apply_maven_change(change: Change) -> None:
     text = change.path.read_text()
-    # Limit replacement to the artifact's declaration by matching old version once.
     escaped = re.escape(change.before)
-    updated, count = re.subn(rf"(<version>\s*){escaped}(\s*</version>)", rf"\g<1>{change.after}\g<2>", text, count=1)
+    if change.owner == "property":
+        property_name = re.search(r"property ([\w.-]+) for", change.description)
+        pattern = rf"(<{re.escape(property_name.group(1))}>\s*){escaped}(\s*</{re.escape(property_name.group(1))}>)" if property_name else "(?!)"
+    elif change.owner == "spring-boot-parent":
+        pattern = rf"(<artifactId>spring-boot-starter-parent</artifactId>\s*<version>\s*){escaped}(\s*</version>)"
+    else:
+        artifact = re.escape(change.description.rsplit(" ", 1)[-1].rsplit(":", 1)[-1])
+        pattern = rf"(<dependency>.*?<artifactId>\s*{artifact}\s*</artifactId>.*?<version>\s*){escaped}(\s*</version>.*?</dependency>)"
+    updated, count = re.subn(pattern, rf"\g<1>{change.after}\g<2>", text, count=1, flags=re.S)
     if count != 1:
         raise RuntimeError(f"Could not safely apply planned change to {change.path}")
     change.path.write_text(updated)

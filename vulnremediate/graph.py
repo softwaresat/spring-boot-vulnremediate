@@ -6,8 +6,9 @@ from typing import Any, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
-from .models import Change, RunConfig
-from .repository import apply_baseline_change, apply_maven_change, baseline_changes, is_spring_boot_application, parent_first_changes, pom_files, run
+from .github_api import export_dependabot_alerts
+from .models import Change, RemediationPlan, RunConfig
+from .repository import apply_baseline_change, apply_maven_change, baseline_changes, is_spring_boot_application, parent_first_plan, pom_files, run
 from .scans import parse_scan_report
 
 
@@ -16,6 +17,7 @@ class RemediationState(TypedDict, total=False):
     findings: list[Any]
     baseline_changes: list[Change]
     maven_changes: list[Change]
+    plans: list[RemediationPlan]
     commands: list[dict[str, Any]]
     verification_ok: bool
     errors: list[str]
@@ -39,7 +41,12 @@ def harden_baselines(state: RemediationState) -> dict[str, Any]:
 
 
 def ingest_scan(state: RemediationState) -> dict[str, Any]:
-    report = state["config"].scan_report
+    config = state["config"]
+    report = config.scan_report
+    if not report and config.github_repository:
+        report = config.repo / "target" / "dependabot-alerts.json"
+        report.parent.mkdir(exist_ok=True)
+        export_dependabot_alerts(config.github_repository, report, config.github_token_env)
     return {"findings": parse_scan_report(report) if report else []}
 
 
@@ -48,7 +55,8 @@ def plan_parent_first(state: RemediationState) -> dict[str, Any]:
     # Effective POM provides evidence of inherited dependency management; errors are non-fatal.
     completed = run(["mvn", "-q", "help:effective-pom", "-Doutput=target/effective-pom.xml"], config.repo)
     command = {"command": "mvn -q help:effective-pom -Doutput=target/effective-pom.xml", "exit_code": completed.returncode}
-    return {"maven_changes": parent_first_changes(config.repo, state.get("findings", [])), "commands": state.get("commands", []) + [command]}
+    plans = parent_first_plan(config.repo, state.get("findings", []))
+    return {"plans": plans, "maven_changes": [plan.change for plan in plans if plan.change], "commands": state.get("commands", []) + [command]}
 
 
 def apply_plan(state: RemediationState) -> dict[str, Any]:
@@ -70,6 +78,9 @@ def verify(state: RemediationState) -> dict[str, Any]:
         scanned = subprocess.run(command, cwd=config.repo, shell=True, text=True, capture_output=True, check=False)
         commands.append({"command": command, "exit_code": scanned.returncode})
         ok = scanned.returncode == 0
+    blocked = [plan for plan in state.get("plans", []) if plan.blocked_reason]
+    if config.fail_on_remaining and blocked:
+        ok = False
     return {"verification_ok": ok, "commands": commands}
 
 
@@ -77,10 +88,15 @@ def commit_and_push(state: RemediationState) -> dict[str, Any]:
     config = state["config"]
     if not (config.push and config.apply and state.get("verification_ok")):
         return {}
+    if config.branch:
+        branch = run(["git", "switch", "-c", config.branch], config.repo)
+        if branch.returncode:
+            return {"errors": state.get("errors", []) + [f"Could not create branch {config.branch}"]}
     dirty = run(["git", "status", "--porcelain"], config.repo)
     if not dirty.stdout.strip():
         return {}
-    for command in (["git", "add", "-A"], ["git", "commit", "-m", "chore: remediate dependency vulnerabilities"], ["git", "push"]):
+    push_command = ["git", "push", "--set-upstream", "origin", config.branch] if config.branch else ["git", "push"]
+    for command in (["git", "add", "-A"], ["git", "commit", "-m", "chore: remediate Spring Boot vulnerabilities"], push_command):
         completed = run(command, config.repo)
         if completed.returncode:
             return {"errors": state.get("errors", []) + [f"Git command failed: {' '.join(command)}"]}

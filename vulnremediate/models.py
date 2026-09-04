@@ -24,9 +24,18 @@ class Change:
     description: str
     before: str
     after: str
+    owner: str = "direct"
 
     def audit(self) -> dict[str, str]:
-        return {"path": str(self.path), "description": self.description, "before": self.before, "after": self.after}
+        return {"path": str(self.path), "description": self.description, "before": self.before, "after": self.after, "owner": self.owner}
+
+
+@dataclass(frozen=True)
+class RemediationPlan:
+    finding: Finding
+    change: Change | None
+    rationale: str
+    blocked_reason: str | None = None
 
 
 @dataclass
@@ -40,6 +49,10 @@ class RunConfig:
     helm_chart_version: str | None = None
     spring_boot_version: str | None = None
     scan_command: str | None = None
+    github_repository: str | None = None
+    github_token_env: str = "GITHUB_TOKEN"
+    branch: str | None = None
+    fail_on_remaining: bool = True
 
     @classmethod
     def from_mapping(cls, repo: Path, mapping: dict[str, Any], **overrides: Any) -> "RunConfig":
@@ -53,6 +66,8 @@ def audit_value(value: Any) -> Any:
         return value.audit()
     if isinstance(value, Finding):
         return asdict(value)
+    if isinstance(value, RemediationPlan):
+        return {"finding": asdict(value.finding), "change": value.change.audit() if value.change else None, "rationale": value.rationale, "blocked_reason": value.blocked_reason}
     if isinstance(value, Path):
         return str(value)
     return value
